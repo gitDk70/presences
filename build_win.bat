@@ -15,6 +15,7 @@ pyinstaller ^
   --clean ^
   --noconfirm ^
   --name "%APP_NAME%" ^
+  --add-data "user.png;." ^
   presences.py
 
 if errorlevel 1 (
