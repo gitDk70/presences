@@ -2,38 +2,38 @@ name: Build Windows EXE
 
 on:
   push:
-    branches: [ main, master ]
-  workflow_dispatch:        # lets you trigger manually from GitHub UI
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install openpyxl pyinstaller
+        run: |
+          pip install openpyxl pyinstaller --quiet
+          pip uninstall pathlib -y 2>nul || true
 
       - name: Build EXE
-        run: >
-          pyinstaller
-          --onefile
-          --windowed
-          --clean
-          --noconfirm
-          --name "Presences"
-          presences.py
+        run: |
+          pyinstaller `
+            --onefile `
+            --windowed `
+            --clean `
+            --noconfirm `
+            --name "Presences" `
+            --add-data "user.png;." `
+            presences.py
 
-      - name: Upload EXE artifact
+      - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
           name: Presences-Windows
           path: dist/Presences.exe
-          if-no-files-found: error
