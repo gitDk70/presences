@@ -6,8 +6,16 @@ from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 from collections import OrderedDict
 
+import os
+import sys
+
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+
+def _resource_path(filename: str) -> str:
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, filename)
 
 
 class AttendanceApp:
@@ -36,6 +44,14 @@ class AttendanceApp:
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
+        # Logo header
+        try:
+            self._logo_img = tk.PhotoImage(file=_resource_path("user.png"))
+            logo_lbl = ttk.Label(self.root, image=self._logo_img)
+            logo_lbl.pack(pady=(10, 2))
+        except Exception:
+            pass
+
         # Event header
         info = ttk.LabelFrame(self.root, text="Informations", padding=10)
         info.pack(fill="x", padx=12, pady=(10, 4))
@@ -139,6 +155,14 @@ class AttendanceApp:
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+
+        # Copyright footer
+        ttk.Label(
+            self.root,
+            text="© 2026 Djaouida Kharchi",
+            foreground="gray",
+            font=("TkDefaultFont", 9),
+        ).pack(pady=(0, 6))
 
     def _build_tab(
         self,
