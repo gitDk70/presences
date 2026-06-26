@@ -44,9 +44,10 @@ class AttendanceApp:
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        # Logo header
+        # Logo header + window/taskbar icon
         try:
             self._logo_img = tk.PhotoImage(file=_resource_path("user.png"))
+            self.root.iconphoto(True, self._logo_img)
             logo_lbl = ttk.Label(self.root, image=self._logo_img)
             logo_lbl.pack(pady=(10, 2))
         except Exception:
