@@ -22,7 +22,7 @@ class AttendanceApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Présences")
-        self.root.geometry("700x680")
+        self.root.geometry("700x720")
         self.root.resizable(True, True)
 
         # Date frozen at startup
