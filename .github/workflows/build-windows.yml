@@ -30,6 +30,7 @@ jobs:
             --noconfirm `
             --name "Presences" `
             --add-data "user.png;." `
+            --icon "user.ico" `
             presences.py
 
       - name: Upload EXE
