@@ -1096,17 +1096,38 @@ class QrTab:
             "Imprimer", f"Imprimer {len(sel)} codes QR ({len(pages)} page(s)) ?"
         ):
             return
-        path = os.path.join(tempfile.mkdtemp(prefix="qr_"), "codes_qr.pdf")
-        pages[0].save(path, "PDF", resolution=300, save_all=True, append_images=pages[1:])
+        folder = tempfile.mkdtemp(prefix="qr_")
         try:
             if sys.platform.startswith("win"):
-                os.startfile(path, "print")  # type: ignore[attr-defined]
+                if not self._print_windows(pages, folder):
+                    return  # opened in a viewer instead; the user prints from there
             else:
+                path = os.path.join(folder, "codes_qr.pdf")
+                pages[0].save(path, "PDF", resolution=300, save_all=True, append_images=pages[1:])
                 subprocess.run(["lpr", path], check=True)
         except Exception as exc:
             messagebox.showerror("Erreur", f"Impression impossible :\n{exc}")
             return
         self.status.config(text=f"Envoyé à l'imprimante : {len(sel)} code(s) QR.")
+
+    @staticmethod
+    def _print_windows(pages: list[Image.Image], folder: str) -> bool:
+        """One PNG per page (no PDF reader needed): MS Paint prints to the default printer."""
+        for i, page in enumerate(pages, 1):
+            png = os.path.join(folder, f"codes_qr_{i}.png")
+            page.save(png, "PNG", dpi=(300, 300))
+            try:
+                subprocess.run(["mspaint", "/p", png], check=True)
+            except (OSError, subprocess.CalledProcessError):
+                try:
+                    os.startfile(png, "print")  # type: ignore[attr-defined]
+                except OSError:
+                    # No print handler: open in the default viewer so the user can print
+                    os.startfile(png)  # type: ignore[attr-defined]
+                    messagebox.showinfo("Imprimer", "Le fichier est ouvert : "
+                                        "utilisez Ctrl+P pour l'imprimer.")
+                    return False
+        return True
 
     # ── E-mail ────────────────────────────────────────────────────────────────
 
