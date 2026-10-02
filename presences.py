@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from email.message import EmailMessage
 
 import openpyxl
@@ -915,6 +916,20 @@ class QrTab:
         self.combo.grid(row=1, column=1, sticky="w", padx=8)
         self.combo.bind("<<ComboboxSelected>>", lambda e: self._show_preview())
 
+        self.no_email = tk.BooleanVar(value=False)
+        self.no_email_chk = ttk.Checkbutton(
+            src, text="Sans courriel", variable=self.no_email, command=self._toggle_no_email
+        )
+        self.no_email_chk.grid(row=2, column=0, sticky="w", pady=3)
+        self.no_email_lbl = ttk.Label(src, text="", foreground="gray")
+        self.no_email_lbl.grid(row=2, column=1, sticky="w", padx=8)
+
+        self.from_here = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            src, text="À partir de ce membre (jusqu'à la fin de la liste)",
+            variable=self.from_here,
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=3)
+
         bar = ttk.Frame(parent)
         bar.pack(fill="x", padx=12, pady=(4, 2))
         ttk.Button(bar, text="Générer tous", command=self._generate_all,
@@ -1026,6 +1041,8 @@ class QrTab:
         self.members = sorted(seen.values(), key=lambda m: _natural_key(m[0]))
         self.combo.config(values=[self.ALL] + [self._label(m) for m in self.members])
         self.member_var.set(self.ALL)
+        self.no_email.set(False)
+        self._toggle_no_email()
         self.file_lbl.config(text=f"{os.path.basename(path)} ({len(self.members)} membres)",
                              foreground="")
         self._show_preview()
@@ -1034,13 +1051,34 @@ class QrTab:
     def _label(m: tuple) -> str:
         return f"{m[0]} — {m[1]} {m[2]}".strip(" —")
 
+    def _without_email(self) -> list[tuple[str, str, str, str]]:
+        return [m for m in self.members if "@" not in m[3]]
+
+    def _toggle_no_email(self) -> None:
+        if self.no_email.get():
+            self.member_var.set(self.ALL)
+            self._show_preview()
+            self.combo.config(state="disabled")
+            self.no_email_lbl.config(text=f"{len(self._without_email())} membre(s) sans courriel")
+        else:
+            self.combo.config(state="readonly")
+            self.no_email_lbl.config(text="")
+
     def _selected(self) -> list[tuple[str, str, str, str]] | None:
         """Chosen member(s); None (after a warning) if there is nothing to act on."""
         if not self.members:
             messagebox.showwarning("Attention", "Chargez d'abord la liste des membres.")
             return None
+        if self.no_email.get():
+            without = self._without_email()
+            if not without:
+                messagebox.showwarning("Attention", "Tous les membres ont un courriel.")
+                return None
+            return without
         idx = self.combo.current()
-        return self.members if idx <= 0 else [self.members[idx - 1]]
+        if idx <= 0:
+            return self.members
+        return self.members[idx - 1:] if self.from_here.get() else [self.members[idx - 1]]
 
     def _show_preview(self) -> None:
         idx = self.combo.current()
@@ -1072,14 +1110,15 @@ class QrTab:
         messagebox.showinfo("Succès", f"{len(members)} code(s) QR généré(s) dans :\n{folder}")
 
     def _generate_all(self) -> None:
-        if self._selected() is not None:
-            self._save(self.members)
+        sel = self._selected()
+        if sel is not None:
+            self._save(sel)
 
     def _generate_one(self) -> None:
         if self._selected() is None:
             return
         idx = self.combo.current()
-        if idx <= 0:
+        if self.no_email.get() or idx <= 0:
             messagebox.showwarning("Attention", "Choisissez un membre dans la liste.")
             return
         self._show_preview()
@@ -1162,41 +1201,98 @@ class QrTab:
         self.status.config(text="Envoi en cours…")
         self.app.root.after(100, self._poll)
 
-    def _send_worker(self, host, port, user, pw, subject, body, targets, skipped) -> None:
-        sent, failed = 0, []
+    @staticmethod
+    def _smtp_connect(host: str, port: int, user: str, pw: str) -> smtplib.SMTP:
+        smtp = (smtplib.SMTP_SSL(host, port, timeout=30) if port == 465
+                else smtplib.SMTP(host, port, timeout=30))
         try:
-            smtp = (smtplib.SMTP_SSL(host, port, timeout=30) if port == 465
-                    else smtplib.SMTP(host, port, timeout=30))
-            with smtp:
-                smtp.ehlo()  # server capabilities are unknown until EHLO
-                if port != 465 and smtp.has_extn("starttls"):
-                    smtp.starttls(context=ssl.create_default_context())
-                    smtp.ehlo()
-                if smtp.has_extn("auth"):
-                    smtp.login(user, pw)
-                for i, m in enumerate(targets, 1):
-                    mail = EmailMessage()
-                    mail["From"], mail["To"], mail["Subject"] = user, m[3], subject
-                    mail.set_content(body.replace("{prenom}", m[1]).replace("{nom}", m[2])
-                                     .replace("{appartement}", m[0]))
-                    mail.add_attachment(_qr_png_bytes(_make_qr(_member_stem(m))),
-                                        maintype="image", subtype="png",
-                                        filename=f"{_member_stem(m)}.png")
-                    try:
-                        smtp.send_message(mail)
-                        sent += 1
-                    except smtplib.SMTPException as exc:
-                        failed.append(f"{m[0]} ({m[3]}): {exc}")
-                    self._queue.put(("progress", f"Envoi… {i}/{len(targets)}"))
+            smtp.ehlo()  # server capabilities are unknown until EHLO
+            if port != 465 and smtp.has_extn("starttls"):
+                smtp.starttls(context=ssl.create_default_context())
+                smtp.ehlo()
+            if smtp.has_extn("auth"):
+                smtp.login(user, pw)
+        except Exception:
+            smtp.close()
+            raise
+        return smtp
+
+    def _send_worker(self, host, port, user, pw, subject, body, targets, skipped) -> None:
+        """Send one message per target. The server may drop the connection (Gmail does
+        after a burst), so reconnect and retry; stop cleanly if a sending limit is hit."""
+        sent: list[str] = []
+        failed: list[str] = []
+        unsent: list[str] = []
+        smtp = None
+        reason = ""
+        try:
+            smtp = self._smtp_connect(host, port, user, pw)
         except Exception as exc:
             self._queue.put(("done", False, f"Échec de l'envoi : {exc}"))
             return
-        text = f"{sent} courriel(s) envoyé(s)."
+        try:
+            for i, m in enumerate(targets):
+                mail = EmailMessage()
+                mail["From"], mail["To"], mail["Subject"] = user, m[3], subject
+                mail.set_content(body.replace("{prenom}", m[1]).replace("{nom}", m[2])
+                                 .replace("{appartement}", m[0]))
+                mail.add_attachment(_qr_png_bytes(_make_qr(_member_stem(m))),
+                                    maintype="image", subtype="png",
+                                    filename=f"{_member_stem(m)}.png")
+                error = ""
+                for attempt in range(4):
+                    try:
+                        if smtp is None:
+                            smtp = self._smtp_connect(host, port, user, pw)
+                        smtp.send_message(mail)
+                        sent.append(m[0])
+                        error = ""
+                        break
+                    except smtplib.SMTPAuthenticationError as exc:
+                        reason = f"Authentification refusée : {exc}"
+                        break
+                    except smtplib.SMTPResponseException as exc:
+                        text = str(exc).lower()
+                        if exc.smtp_code == 550 and ("5.4.5" in text or "limit" in text):
+                            reason = f"Limite d'envoi du serveur atteinte : {exc}"
+                            break
+                        if exc.smtp_code // 100 == 4:  # temporary: reconnect and retry
+                            error = str(exc)
+                        else:
+                            error = str(exc)
+                            break
+                    except (smtplib.SMTPException, OSError) as exc:  # dropped connection
+                        error = str(exc)
+                    # reconnect before the next attempt
+                    if smtp is not None:
+                        try:
+                            smtp.close()
+                        except Exception:
+                            pass
+                        smtp = None
+                    time.sleep(2 * (attempt + 1))
+                if reason:
+                    unsent = [t[0] for t in targets[i:]]
+                    break
+                if error:
+                    failed.append(f"{m[0]} ({m[3]}): {error}")
+                self._queue.put(("progress", f"Envoi… {i + 1}/{len(targets)}"))
+                time.sleep(1)  # avoid triggering the server's burst protection
+        finally:
+            if smtp is not None:
+                try:
+                    smtp.quit()
+                except Exception:
+                    pass
+        text = f"{len(sent)} courriel(s) envoyé(s)."
         if skipped:
             text += f" {skipped} sans adresse."
+        if reason:
+            text += f"\n{reason}\n{len(unsent)} non envoyé(s) : {', '.join(unsent)}"
         if failed:
-            text += f"\n{len(failed)} échec(s) :\n" + "\n".join(failed[:10])
-        self._queue.put(("done", not failed, text))
+            text += f"\n{len(failed)} échec(s) : {', '.join(f.split(' ')[0] for f in failed)}\n"
+            text += "\n".join(failed[:5])
+        self._queue.put(("done", not failed and not reason, text))
 
     def _poll(self) -> None:
         try:
