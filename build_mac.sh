@@ -8,7 +8,7 @@ STAGING="dist/.dmg_staging"
 
 # ── 1. Dependencies ───────────────────────────────────────────────────────────
 echo ">>> Installing Python dependencies..."
-pip3 install openpyxl "qrcode[pil]" pyinstaller --quiet
+pip3 install openpyxl "qrcode[pil]" keyring pyinstaller --quiet
 pip3 uninstall pathlib -y 2>/dev/null && echo "    Removed obsolete 'pathlib' backport" || true
 
 # ── 2. Build .app ─────────────────────────────────────────────────────────────
@@ -20,6 +20,7 @@ pyinstaller \
   --noconfirm \
   --name "$APP_NAME" \
   --add-data "logo.png:." \
+  --collect-submodules keyring \
   presences.py
 
 # ── 3. Stage DMG contents ─────────────────────────────────────────────────────

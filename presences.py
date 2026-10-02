@@ -8,6 +8,7 @@ from collections import OrderedDict
 
 import base64
 import io
+import json
 import os
 import queue
 import re
@@ -762,6 +763,67 @@ class AbsencesTab:
 
 # ── QR codes ──────────────────────────────────────────────────────────────────
 
+# ── Saved e-mail settings (password goes to the OS keychain) ─────────────────
+
+_KEYRING_SERVICE = "Presences-SMTP"
+
+
+def _config_path() -> str:
+    if sys.platform.startswith("win"):
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.path.expanduser("~/.config")
+    return os.path.join(base, "Presences", "config.json")
+
+
+def _load_config() -> dict:
+    try:
+        with open(_config_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_config(cfg: dict) -> None:
+    path = _config_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def _keyring_backend():
+    """The OS keychain, chosen directly (no entry-point discovery, which can break)."""
+    if sys.platform == "darwin":
+        from keyring.backends.macOS import Keyring
+    elif sys.platform.startswith("win"):
+        from keyring.backends.Windows import WinVaultKeyring as Keyring
+    else:
+        import keyring
+        return keyring.get_keyring()
+    return Keyring()
+
+
+def _get_password(user: str) -> str:
+    try:
+        return _keyring_backend().get_password(_KEYRING_SERVICE, user) or ""
+    except Exception:
+        return ""
+
+
+def _set_password(user: str, password: str) -> bool:
+    try:
+        kr = _keyring_backend()
+        if password:
+            kr.set_password(_KEYRING_SERVICE, user, password)
+        else:
+            kr.delete_password(_KEYRING_SERVICE, user)
+        return True
+    except Exception:
+        return False
+
+
 def _member_stem(m: tuple[str, str, str, str]) -> str:
     """A101_Prenom_Nom — used as file name and as the QR code content."""
     parts = [p.strip().replace(" ", "_") for p in m[:3] if p.strip()]
@@ -879,6 +941,7 @@ class QrTab:
         self.smtp_user = tk.StringVar()
         self.smtp_pass = tk.StringVar()
         self.mail_subject = tk.StringVar(value="Votre code QR")
+        self.remember = tk.BooleanVar(value=False)
         ttk.Label(mail, text="Serveur :").grid(row=0, column=0, sticky="w", pady=2)
         ttk.Entry(mail, textvariable=self.smtp_host).grid(row=0, column=1, sticky="ew", padx=6)
         ttk.Label(mail, text="Port :").grid(row=0, column=2, sticky="e")
@@ -897,8 +960,52 @@ class QrTab:
             "pour l'appartement {appartement}.\n\nCordialement,\nLes Voisins de Viau-Robert",
         )
         self.mail_body.grid(row=3, column=1, columnspan=3, sticky="ew", padx=6)
+        ttk.Checkbutton(
+            mail, text="Mémoriser le courriel et le mot de passe sur cet ordinateur",
+            variable=self.remember,
+        ).grid(row=4, column=1, columnspan=3, sticky="w", padx=6, pady=(4, 0))
         self.status = ttk.Label(parent, text="", foreground="gray")
         self.status.pack(fill="x", padx=12, pady=(2, 8))
+        self._restore_settings()
+
+    # ── Saved settings ────────────────────────────────────────────────────────
+
+    def _restore_settings(self) -> None:
+        cfg = _load_config().get("smtp")
+        if not cfg:
+            return
+        self.smtp_host.set(cfg.get("host", self.smtp_host.get()))
+        self.smtp_port.set(cfg.get("port", self.smtp_port.get()))
+        self.smtp_user.set(cfg.get("user", ""))
+        self.mail_subject.set(cfg.get("subject", self.mail_subject.get()))
+        if cfg.get("body"):
+            self.mail_body.delete("1.0", "end")
+            self.mail_body.insert("1.0", cfg["body"])
+        self.smtp_pass.set(_get_password(self.smtp_user.get()))
+        self.remember.set(True)
+
+    def _store_settings(self) -> None:
+        """Called after a successful send, according to the 'Mémoriser' checkbox."""
+        cfg = _load_config()
+        user = self.smtp_user.get().strip()
+        try:
+            if self.remember.get():
+                cfg["smtp"] = {
+                    "host": self.smtp_host.get().strip(), "port": self.smtp_port.get().strip(),
+                    "user": user, "subject": self.mail_subject.get(),
+                    "body": self.mail_body.get("1.0", "end").strip(),
+                }
+                _save_config(cfg)
+                if not _set_password(user, self.smtp_pass.get()):
+                    self.status.config(text="Courriel mémorisé, mais pas le mot de passe "
+                                            "(trousseau indisponible).")
+            else:
+                old = cfg.pop("smtp", None)
+                if old:
+                    _save_config(cfg)
+                    _set_password(old.get("user", ""), "")
+        except OSError:
+            pass
 
     # ── Members ───────────────────────────────────────────────────────────────
 
@@ -1078,6 +1185,8 @@ class QrTab:
                     self.status.config(text=item[1])
                 else:
                     self.status.config(text=item[2].splitlines()[0])
+                    if item[1]:
+                        self._store_settings()
                     (messagebox.showinfo if item[1] else messagebox.showwarning)(
                         "Envoi" if item[1] else "Attention", item[2])
                     self.app.root.lift()
