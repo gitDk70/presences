@@ -1040,8 +1040,10 @@ class QrTab:
             smtp = (smtplib.SMTP_SSL(host, port, timeout=30) if port == 465
                     else smtplib.SMTP(host, port, timeout=30))
             with smtp:
+                smtp.ehlo()  # server capabilities are unknown until EHLO
                 if port != 465 and smtp.has_extn("starttls"):
                     smtp.starttls(context=ssl.create_default_context())
+                    smtp.ehlo()
                 if smtp.has_extn("auth"):
                     smtp.login(user, pw)
                 for i, m in enumerate(targets, 1):
