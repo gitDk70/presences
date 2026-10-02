@@ -18,7 +18,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install openpyxl pyinstaller --quiet
+          pip install openpyxl "qrcode[pil]" pyinstaller --quiet
           pip uninstall pathlib -y 2>nul || true
 
       - name: Build EXE
@@ -30,6 +30,7 @@ jobs:
             --noconfirm `
             --name "Presences" `
             --add-data "user.png;." `
+            --add-data "logo.png;." `
             --icon "user.ico" `
             presences.py
 
